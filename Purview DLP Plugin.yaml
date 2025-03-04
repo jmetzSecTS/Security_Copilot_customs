@@ -1,0 +1,103 @@
+Descriptor:
+  Name: PurviewKQLPlugin
+  DisplayName: Find Purview alerts and related information.
+  DescriptionForModel: |-
+              A set of skills designed to help the user find data leakage protection (Microsoft Purview DLP) alerts using KQL (kusto query language) queries.
+  Description: Skills to report on Microsoft Purview DLP alerts using Kusto queries for SCU efficiency.
+  SupportedAuthTypes:
+    - None
+
+SkillGroups:
+  - Format: KQL
+    Skills:
+      - Name: GetDLPAlerts
+        DisplayName: Top DLP Alerts.
+        DescriptionForModel: This skill helps the user to find all DLP alerts from the past 30 days from Microsoft Purview DLP (data loss prevention). This skill can pull alerts that relate to exfiltration of data that have triggered a DLP alert and should return at least 50 results.
+        Description: Fetches the list of DLP alerts from the past 7 days by default
+        ExamplePrompts:
+          - Give me all DLP alerts from the past 7 days
+          - Tell me about all of my DLP alerts in the past X days/hours/weeks/month(s)
+          - What DLP alerts have triggered in the past month?
+          - Use GetDLPAlerts
+        Inputs:
+          - Name: dayRange
+            PlaceholderValue: The time range for the query (e.g., 1d, 7d)
+            Description: Time range to perform a KQL query in the format of day number followed by `d`.
+            DefaultValue: 7d
+            Required: false
+        Settings:
+          Target: Defender
+          Template: |-
+              AlertInfo
+              | where Timestamp >= ago({{dayRange}})
+              | where ServiceSource == "Microsoft Data Loss Prevention"
+              | top 50 by Timestamp desc
+              | project Timestamp, Title, Category, Severity
+
+      - Name: GetIRMAlerts
+        DisplayName: Top Purview IRM Alerts
+        Description: Fetches the list of Microsoft Purview IRM alerts from the past 7 days by default.
+        ExamplePrompts:
+          - Give me all IRM alerts from the past 7 days
+          - Tell me about all of my Insider Risk alerts in the past X days/hours/weeks/month(s)
+          - What IRM alerts have triggered in the past month?
+          - Use GetIRMAlerts
+        Inputs:
+          - Name: dayRange
+            PlaceholderValue: The time range for the query (e.g., 1d, 7d)
+            Description: Time range to perform a KQL query in the format of day number followed by `d`.
+            DefaultValue: 7d
+            Required: false
+        Settings:
+          Target: Defender
+          Template: |-
+              AlertInfo
+              | where Timestamp >= ago({{dayRange}})
+              | where ServiceSource == "Microsoft Insider Risk Management"
+              | top 50 by Timestamp desc
+              | project Timestamp, Title, Category, Severity
+
+      - Name: TopDataSecurityEvents
+        DisplayName: Top Data Security Events
+        DescriptionForModel: This skill performs a KQL (kusto query language) query to list all data security events, highlighting the most salient columns.
+        Description: Fetches the list of the top 50 most recent data security events of all types and sources including DLP, IRM, and Sentitive Information related file actions from the past 7 days by default.
+        ExamplePrompts:
+          - Give me all data security alerts from the past 7 days
+          - Tell me about all of my Insider Risk alerts in the past X days/hours/weeks/month(s)
+          - What IRM alerts have triggered in the past month?
+          - Use TopDataSecurityEvents
+        Inputs:
+          - Name: dayRange
+            PlaceholderValue: The time range for the query (e.g., 1d, 7d)
+            Description: Time range to perform a KQL query in the format of day number followed by `d`.
+            DefaultValue: 7d
+            Required: false
+        Settings:
+          Target: Defender
+          Template: |-
+                DataSecurityEvents
+                | where Timestamp >= ago({{dayRange}})
+                | top 50 by Timestamp desc
+                | project Timestamp, Application, ActionType, Operation, ObjectId, DeviceName, AccountUpn, IPAddress
+
+      - Name: CrowdStrikeEDRAlerts
+        DisplayName: Top 50 Crowdstrike Falcon EDR Alerts
+        DescriptionForModel: This skill performs a KQL (kusto query language) query to list all Crowdstrike Falcon alerts requested by the user
+        Description: This skill will return the top 50 most recent Crowdstrike Falcon alerts from Sentinel.
+        ExamplePrompts:
+          - Give me all Crowdstrike Falcon alerts from the past 7 days
+          - Tell me about all of my Falcon alerts in the past X days/hours/weeks/month(s)
+          - What Crowdstrike alerts have triggered in the past month?
+          - Use CrowdStrikeEDRAlerts
+        Inputs:
+          - Name: dayRange
+            PlaceholderValue: The time range for the query (e.g., 1d, 7d)
+            Description: Time range to perform a KQL query in the format of day number followed by `d`.
+            DefaultValue: 7d
+            Required: false
+        Settings:
+          Target: Defender
+          Template: |-
+                CrowdstrikeReplicator
+                | where Timestamp >= ago({{dayRange}})
+                | top 50 by Timestamp desc
