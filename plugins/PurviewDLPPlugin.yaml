@@ -1,0 +1,257 @@
+#skills by jmetzler@microsoft.com, jonnords@microsoft.com
+
+Descriptor:
+  Name: PurviewKQLPlugin
+  DisplayName: Find Purview alerts and related information.
+  DescriptionForModel: |-
+              A set of skills designed to help the user find data leakage protection (Microsoft Purview DLP) alerts using KQL (kusto query language) queries.
+  Description: Skills to report on Microsoft Purview DLP alerts using Kusto queries.
+  SupportedAuthTypes:
+    - None
+
+SkillGroups:
+  - Format: KQL
+    Skills:
+      - Name: SensitiveGetExternalUploadsfromclients
+        DisplayName: Get uploads to external websites from clients containing sensitive information
+        Description: Fetches uploads to external websites from clients containing sensitive information
+        Inputs:
+          - Name: site
+            Description: Specify the site for which the uploads are to be fetched
+            Required: false
+          - Name: user
+            Description: Specify the user for which the uploads are to be fetched
+            Required: false
+          - Name: sitname
+            Description: Specify the sensitive information type for which the uploads are to be fetched
+            Required: false
+        Settings:
+          Target: Defender
+          Template: |-
+              let site = '{{site}}';
+              let user = '{{user}}';
+              let sitvar = '{{sitname}}';
+              CloudAppEvents
+              | where RawEventData.Workload has 'EndPoint'
+              | where RawEventData.TargetDomain has site
+              | where RawEventData.UserId has user
+              | where ActionType has 'FileUploadedToCloud'
+              | mv-expand Sensitive = RawEventData.SensitiveInfoTypeData
+              | where Sensitive.SensitiveInfoTypeName has sitvar
+              | extend TargetDomain = tostring(RawEventData.TargetDomain)
+              | extend EnforcementMode_ = tostring(parse_json(tostring(RawEventData.EndpointMetaData)).EnforcementMode)
+              | extend EndpointOperation_ = tostring(parse_json(tostring(RawEventData.EndpointMetaData)).EndpointOperation)
+              | extend FileName = tostring(parse_path(tostring(RawEventData.ObjectId)).Filename)
+              | summarize count() by TargetDomain, Datatype=tostring(Sensitive.SensitiveInfoTypeName)
+
+      - Name: SensitiveEmailsaccessedbyusers
+        DisplayName: Who accessed the emails containing sensitive information and from where
+        Description: Fetches the sensitive information type,label user and the email accessed as well as ISP, Device information
+        Inputs:
+          - Name: user
+            Description: Specify the user id for which the email access is to be fetched
+            Required: false
+          - Name: subject
+            Description: Specify the subject for which the email access is to be fetched
+            Required: false
+          - Name: InternetMessageId
+            Description: Specify the InternetMessageId for which the email access is to be fetched
+            Required: false
+        Settings:
+          Target: Defender
+          Template: |-
+              let user = '{{user}}';
+              let subject = '{{subject}}';
+              let InternetMessageId = '{{InternetMessageId}}';
+              CloudAppEvents
+                | where tostring(RawEventData.Workload) == "Exchange"
+                | where ActionType == "DlpRuleMatch"
+                | where tolower(RawEventData.UserId) has tolower(user)
+                | where ObjectId has InternetMessageId
+                | where tolower(ObjectName) has tolower(subject)
+                | extend sit = parse_json(tostring(parse_json(tostring(parse_json(tostring(parse_json(tostring(RawEventData.PolicyDetails))[0].Rules))[0].ConditionsMatched)).SensitiveInformation))
+                | where sit != ''
+                | mv-expand sit
+                | project InternetMessageId=ObjectId,sit,Subject = ObjectName
+                | join kind=inner
+                (
+                CloudAppEvents
+                | where tostring(RawEventData.Operation) == "MailItemsAccessed"
+                | mv-expand RawEventData.Folders
+                | mv-expand FolderItem = RawEventData_Folders.FolderItems
+                | extend InternetMessageId = tostring(FolderItem.InternetMessageId)
+                | extend SensitivityLabel = tostring(FolderItem.Sensitivity)
+                )
+                on $left.InternetMessageId == $right.InternetMessageId
+                | join kind=leftouter
+                (
+                DeviceInfo
+                | summarize by DeviceId,PublicIP,DeviceName
+                )
+                on $left.IPAddress == $right.PublicIP
+                | summarize arg_max(Timestamp, *) by UserId = tostring(RawEventData.UserId),InternetMessageId,ISP,tostring(IPTags),DeviceName
+                | project AccountType,Subject,DataType=sit.SensitiveInformationTypeName,SensitivityLabel,MailboxOwnerUPN = tostring(RawEventData.MailboxOwnerUPN),UserId = tostring(RawEventData.UserId),ISP,IPTags,CountryCode,UserAgent,DeviceName
+
+      - Name: SensitiveSharePointOverSharing
+        DisplayName: Oversharing events in SharePoint and OneDrive
+        Description: This skill provides details about oversharing events in SharePoint and OneDrive
+        Inputs:
+          - Name: department
+            Description: Specify the department for which we should return the oversharing events
+            Required: false
+          - Name: sitecollection
+            Description: Specify the site collection for which we should return the oversharing events
+            Required: false
+        Settings:
+          Target: Defender
+          Template: |-
+              let department = '{{department}}';
+              let sitecollection = '{{sitecollection}}';
+              let sharinglink = (
+              CloudAppEvents
+              | where RawEventData.Workload == 'OneDrive' or RawEventData.Workload == 'SharePoint'
+              | where RawEventData.ObjectId has sitecollection
+              | extend Operation = tostring(RawEventData.Operation)
+              //Filter to a smaller set of operations, add additional operations as needed
+              | where Operation == 'AddedToSecureLink'
+                  or Operation == 'SecureLinkCreated'
+                  or Operation == 'SecureLinkUsed'
+                  or Operation == 'SharingSet'
+                  or ActionType == 'RemoveProtection'
+              | extend Sharinglink = tostring(RawEventData.TargetUserOrGroupName)
+              | where Sharinglink matches regex 'SharingLinks.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}.Organization\\w*.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+              | join kind= leftouter
+              (CloudAppEvents
+              | where ActionType == 'GroupRemoved'
+              | extend TargetUserOrGroupName_ = tostring(RawEventData.TargetUserOrGroupName)
+              | extend Sharinglink = tostring(parse_json(tostring(RawEventData.ModifiedProperties))[0].NewValue)
+              )
+              on Sharinglink
+              |extend Type = 'SharingLink'
+              );
+              let group = (
+              CloudAppEvents
+              | where RawEventData.Workload == 'OneDrive' or RawEventData.Workload == 'SharePoint'
+              | where RawEventData.ObjectId has sitecollection
+              | extend Operation = tostring(RawEventData.Operation)
+              //Filter to a smaller set of operations, add additional operations as needed
+              | where Operation == 'AddedToSecureLink'
+                  or Operation == 'SecureLinkCreated'
+                  or Operation == 'SecureLinkUsed'
+                  or Operation == 'SharingSet'
+                  or ActionType == 'RemoveProtection'
+              | extend Sharinglink = tostring(RawEventData.TargetUserOrGroupName)
+              | where Sharinglink has 'Everyone'
+              | join kind= leftouter
+              (CloudAppEvents
+              | where ActionType == 'CompanyLinkRemoved'
+              | extend TargetUserOrGroupName_ = tostring(RawEventData.TargetUserOrGroupName)
+              )
+              on ObjectId
+              | extend Type = 'Group'
+              );
+              union sharinglink,group
+              | extend UnshareOp = tostring(RawEventData1.Operation)
+              | extend ShareTime_ = tostring(RawEventData.CreationTime)
+              | extend UnshareTime = tostring(RawEventData1.CreationTime)
+              | project Type,ObjectName,Sharinglink,ShareTime_,UnshareOp,UnshareTime,tostring(RawEventData.UserId)
+              | join kind=leftouter
+              (
+              IdentityInfo
+              | where Timestamp > ago(7d)
+              | extend AccountUpn = tolower(AccountUpn)
+              )
+              on $left.RawEventData_UserId == $right.AccountUpn
+              | where Department has department
+              | summarize arg_max(Timestamp, *) by Type,ObjectName,Sharinglink,ShareTime_,UnshareOp,UnshareTime,RawEventData_UserId,Department,Country,City
+      - Name: GetDLPAlerts
+        DisplayName: Top DLP Alerts.
+        DescriptionForModel: This skill helps the user to find all DLP alerts from the past 30 days from Microsoft Purview DLP (data loss prevention). This skill can pull alerts that relate to exfiltration of data that have triggered a DLP alert and should return at least 50 results.
+        Description: Fetches the list of DLP alerts from the past 7 days by default
+        ExamplePrompts:
+          - Give me all DLP alerts from the past 7 days
+          - Tell me about all of my DLP alerts in the past X days/hours/weeks/month(s)
+          - What DLP alerts have triggered in the past month?
+          - Use GetDLPAlerts
+        Inputs:
+          - Name: dayRange
+            PlaceholderValue: The time range for the query (e.g., 1d, 7d)
+            Description: Time range to perform a KQL query in the format of day number followed by `d`.
+            DefaultValue: 7d
+            Required: false
+        Settings:
+          Target: Defender
+          Template: |-
+              AlertInfo
+              | where Timestamp >= ago({{dayRange}})
+              | where ServiceSource == "Microsoft Data Loss Prevention"
+              | top 50 by Timestamp desc
+              | project Timestamp, Title, Category, Severity
+
+      - Name: GetIRMAlerts
+        DisplayName: Top Purview IRM Alerts
+        Description: Fetches the list of Microsoft Purview IRM alerts from the past 7 days by default.
+        ExamplePrompts:
+          - Give me all IRM alerts from the past 7 days
+          - Tell me about all of my Insider Risk alerts in the past X days/hours/weeks/month(s)
+          - What IRM alerts have triggered in the past month?
+          - Use GetIRMAlerts
+        Inputs:
+          - Name: dayRange
+            PlaceholderValue: The time range for the query (e.g., 1d, 7d)
+            Description: Time range to perform a KQL query in the format of day number followed by `d`.
+            DefaultValue: 7d
+            Required: false
+        Settings:
+          Target: Defender
+          Template: |-
+              AlertInfo
+              | where Timestamp >= ago({{dayRange}})
+              | where ServiceSource == "Microsoft Insider Risk Management"
+              | top 50 by Timestamp desc
+              | project Timestamp, Title, Category, Severity
+
+      - Name: TopDataSecurityEvents
+        DisplayName: Top Data Security Events
+        DescriptionForModel: This skill performs a KQL (kusto query language) query to list all data security events, highlighting the most salient columns.
+        Description: Fetches the list of the top 50 most recent data security events of all types and sources including DLP, IRM, and Sentitive Information related file actions from the past 7 days by default.
+        ExamplePrompts:
+          - Give me all data security alerts from the past 7 days
+          - Tell me about all of my Insider Risk alerts in the past X days/hours/weeks/month(s)
+          - What IRM alerts have triggered in the past month?
+          - Use TopDataSecurityEvents
+        Inputs:
+          - Name: dayRange
+            PlaceholderValue: The time range for the query (e.g., 1d, 7d)
+            Description: Time range to perform a KQL query in the format of day number followed by `d`.
+            DefaultValue: 7d
+            Required: false
+        Settings:
+          Target: Defender
+          Template: |-
+                DataSecurityEvents
+                | where Timestamp >= ago({{dayRange}})
+                | top 50 by Timestamp desc
+                | project Timestamp, Application, ActionType, Operation, ObjectId, DeviceName, AccountUpn, IPAddress
+
+      - Name: CrowdStrikeEDRAlerts
+        DisplayName: Top 50 Crowdstrike Falcon EDR Alerts
+        DescriptionForModel: This skill performs a KQL (kusto query language) query to list all Crowdstrike Falcon alerts requested by the user
+        Description: This skill will return the top 50 most recent Crowdstrike Falcon alerts from Sentinel.
+        ExamplePrompts:
+          - Give me all Crowdstrike Falcon alerts from the past 7 days
+          - Tell me about all of my Falcon alerts in the past X days/hours/weeks/month(s)
+          - What Crowdstrike alerts have triggered in the past month?
+          - Use CrowdStrikeEDRAlerts
+        Inputs:
+          - Name: dayRange
+            PlaceholderValue: The time range for the query (e.g., 1d, 7d)
+            Description: Time range to perform a KQL query in the format of day number followed by `d`.
+            DefaultValue: 7d
+            Required: false
+        Settings:
+          Target: Defender
+          Template: |-
+                CrowdstrikeReplicator
+                | where Timestamp >= ago({{dayRange}})
+                | top 50 by Timestamp desc
