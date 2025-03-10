@@ -1,0 +1,74 @@
+The below information details how to build out a KQL plugin for Security Copilot. A KQL plugin consists of multiple parts including a descriptor which contains the plugin's name, displayname, and description, as well as skillgroups which include a format (which will be either KQL for KQL and Kusto related skills, GPT (for skills that use generic LLM capabilities), or API (for plugin skills that are to be used to target an API) and then any number of sections called Skill for each of the skills the user wants. The skills all fall under a section called SkillGroups. 
+
+Each skill itself contains sections including a Name, Display Name, Description, DescriptionForModel (which provides a detailed description of the intent of the skill for the large language model), ExamplePrompts (which provide example prompts for the Security Copilot planner to chose this skill based on variable types of prompts that a user might provide Security Copilot), Settings (which include the target and a KQL query to use as a template), Target which will usually be Defender for the Defender advanced hunting tables, but may also be Sentinel (if the user specifies that they are looking to query against Sentinel data tables), LogAnalytics (for data that the user has stored in a Log Analytics workspace), or Kusto (which is for data stored in ADX clusters), and Template (which is the KQL query to use as a template for the  the LLM which the LLM will modify on the fly if any inputs are provided via the skill). 
+
+Use the following example plugin below to build the new plugin, using the same formatting in your response as the formatting of each section below. For each of the skills, substitute out the necessary field data such as the Name, DisplayName, Description, DescriptionForModel, ExamplePrompts, Inputs, and Settings including the Target and Template KQL query which may be provided by the user, or the user may have asked you to generate previously in which case include it there.
+
+The inputs section represents data that can be inserted for the LLM to modify the KQL included in the temlate, such as number of days if a timespan is supplied in the KQL, for example. Inputs is not always necessary and should be left out unless the user asks to be able to supply it. It can also either be set to required: true or required: false. False is usually preferred unless user input is necessary for the KQL query to return results.
+
+A plugin must contain an equal number of spaces on each new line, and similar sections between skills must be aligned with the same number of spaces. If there is an odd number of spaces on a line, add one more space to make it even. Finally, all responses shall be formatted to conform to the following Markdown example:
+
+
+Descriptor:
+  Name: FirstSkill
+  DisplayName: Display Name For This Skill In Security Copilot
+  Description: This is the description for this skill which will show in Security Copilot
+  SkillGroups:
+  - Format: KQL  
+    Skills:
+      - Name: SkillName
+        DisplayName: SkillDisplayName
+        Description: This is a description of the skill
+        DescriptionForModel: This description gives a specific description of the skill's intent, goal, and purpose for the LLM to better understand.
+        ExamplePrompts:
+          - Get high and critical Defender alerts for the last 7 days
+          - Get high and critical Microsoft Defender alerts for the last 7 days
+          - Get high and critical MDE alerts for the last 7 days
+          - Get high and critical Defender alerts for the last week
+          - Get high and critical Microsoft Defender alerts for the last week
+          - Get high and critical MDE alerts for the last week          
+          - Get recent high and critical Defender alerts
+          - Get recent high and critical Microsoft Defender alerts
+          - Get recent high and critical MDE alerts
+
+        Inputs:
+          - Name: UserDataInput
+            Description: Description of the data input
+            Required: true
+        Settings:
+           Target: Defender
+           Template: |-
+            EmailEvents
+            | where Subject == '{{subject}}'
+
+      - Name: SecondSkill
+        DisplayName: Get Url Clicks by Subject and Sender Email
+        Description: This is a description of the second skill
+        DescriptionForModel: This description gives a specific description of the second skill's intent, goal, and purpose for the LLM to better understand.
+        ExamplePrompts:
+          - Get high and critical Defender alerts for the last 7 days
+          - Get high and critical Microsoft Defender alerts for the last 7 days
+          - Get high and critical MDE alerts for the last 7 days
+          - Get high and critical Defender alerts for the last week
+          - Get high and critical Microsoft Defender alerts for the last week
+          - Get high and critical MDE alerts for the last week          
+          - Get recent high and critical Defender alerts
+          - Get recent high and critical Microsoft Defender alerts
+          - Get recent high and critical MDE alerts
+
+        Inputs:
+          - Name: UserDataInput
+            Description: Description of the data input
+            Required: false
+        Settings:
+           Target: Defender
+           Template: |-
+            let email = EmailEvents
+            | where Subject == '{{subject}}' and SenderFromAddress == '{{senderEmail}}'
+            | project NetworkMessageId;
+            let urls = EmailUrlInfo
+            | join email on NetworkMessageId
+            | project Url;
+            UrlClickEvents
+            | join urls on Url
+            | summarize UsersWhoClicked = dcount(AccountUpn)
